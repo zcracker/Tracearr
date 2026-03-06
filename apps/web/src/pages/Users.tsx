@@ -39,13 +39,8 @@ export function Users() {
   const userColumns: ColumnDef<ServerUserWithIdentity>[] = useMemo(
     () => [
       {
-        id: 'displayName',
+        accessorKey: 'username',
         header: t('common:labels.user'),
-        accessorFn: (row: ServerUserWithIdentity) => {
-          const display = row.identityName?.trim() ?? '';
-          return display || row.username;
-        },
-        sortingFn: 'alphanumeric',
         cell: ({ row }) => {
           const user = row.original;
           const avatarUrl = getAvatarUrl(user.serverId, user.thumbUrl, 40);
