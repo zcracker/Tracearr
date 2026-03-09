@@ -11,16 +11,16 @@
  * - Uses fixed engagement functions (array_agg for UUIDs)
  */
 
-import type { FastifyPluginAsync } from 'fastify';
-import { sql } from 'drizzle-orm';
 import {
-  REDIS_KEYS,
   CACHE_TTL,
+  REDIS_KEYS,
   topContentQuerySchema,
   type TopContentQueryInput,
   type TopMoviesResponse,
   type TopShowsResponse,
 } from '@tracearr/shared';
+import { sql } from 'drizzle-orm';
+import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db/client.js';
 import { validateServerAccess } from '../../utils/serverFiltering.js';
 import { buildLibraryCacheKey } from './utils.js';
@@ -52,31 +52,36 @@ interface RawShowRow {
 }
 
 /** Convert period string to date range */
-function getPeriodDates(period: string): { startDate: Date; endDate: Date } {
+function getPeriodDates(period: string): { startDate: Date | null; endDate: Date } {
   const endDate = new Date();
-  let startDate: Date;
 
   switch (period) {
     case '7d':
-      startDate = new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-      break;
+      return { startDate: new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000), endDate };
     case '30d':
-      startDate = new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-      break;
+      return { startDate: new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000), endDate };
     case '90d':
-      startDate = new Date(endDate.getTime() - 90 * 24 * 60 * 60 * 1000);
-      break;
+      return { startDate: new Date(endDate.getTime() - 90 * 24 * 60 * 60 * 1000), endDate };
     case '1y':
-      startDate = new Date(endDate.getTime() - 365 * 24 * 60 * 60 * 1000);
-      break;
+      return { startDate: new Date(endDate.getTime() - 365 * 24 * 60 * 60 * 1000), endDate };
     case 'all':
     default:
-      // Cap "all" to 3 years to prevent unbounded queries that exhaust resources
-      startDate = new Date(endDate.getTime() - 3 * 365 * 24 * 60 * 60 * 1000);
-      break;
+      return { startDate: null, endDate };
   }
+}
 
-  return { startDate, endDate };
+/**
+ * For 'all' period, find the earliest engagement data as the start date.
+ * Falls back to 2020-01-01 if no data exists.
+ */
+async function resolveStartDate(startDate: Date | null): Promise<Date> {
+  if (startDate) return startDate;
+
+  const result = await db.execute(sql`
+    SELECT MIN(day)::date AS earliest FROM daily_content_engagement
+  `);
+  const earliest = (result.rows[0] as { earliest: string | null })?.earliest;
+  return earliest ? new Date(earliest) : new Date('2020-01-01');
 }
 
 export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
@@ -124,6 +129,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
       }
 
       const { startDate, endDate } = getPeriodDates(period);
+      const effectiveStartDate = await resolveStartDate(startDate);
       const offset = (page - 1) * pageSize;
 
       // Sort column mapping - movies don't have binge_score
@@ -150,7 +156,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
           unique_viewers,
           completion_rate
         FROM get_content_engagement(
-          ${startDate}::timestamptz,
+          ${effectiveStartDate}::timestamptz,
           ${endDate}::timestamptz,
           ${serverId ?? null}::uuid,
           'movie'
@@ -178,7 +184,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
           COUNT(*) AS total_movies,
           COALESCE(SUM(total_watch_hours), 0) AS total_watch_hours
         FROM get_content_engagement(
-          ${startDate}::timestamptz,
+          ${effectiveStartDate}::timestamptz,
           ${endDate}::timestamptz,
           ${serverId ?? null}::uuid,
           'movie'
@@ -252,6 +258,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
       }
 
       const { startDate, endDate } = getPeriodDates(period);
+      const effectiveStartDate = await resolveStartDate(startDate);
       const offset = (page - 1) * pageSize;
 
       // Sort column mapping
@@ -278,7 +285,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
           avg_completion_rate,
           binge_score
         FROM get_show_engagement(
-          ${startDate}::timestamptz,
+          ${effectiveStartDate}::timestamptz,
           ${endDate}::timestamptz,
           ${serverId ?? null}::uuid
         )
@@ -305,7 +312,7 @@ export const libraryTopContentRoute: FastifyPluginAsync = async (app) => {
           COUNT(*) AS total_shows,
           COALESCE(SUM(total_watch_hours), 0) AS total_watch_hours
         FROM get_show_engagement(
-          ${startDate}::timestamptz,
+          ${effectiveStartDate}::timestamptz,
           ${endDate}::timestamptz,
           ${serverId ?? null}::uuid
         )
