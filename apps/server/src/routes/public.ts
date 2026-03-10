@@ -8,7 +8,10 @@
  * - GET /docs - OpenAPI 3.0 specification (JSON)
  * - GET /health - System health and server connectivity
  * - GET /stats - Dashboard overview statistics
+ * - GET /stats/today - Today's statistics with timezone support
+ * - GET /activity - Playback activity trends and breakdowns
  * - GET /streams - Currently active playback sessions
+ * - POST /streams/:id/terminate - Terminate an active stream
  * - GET /users - User list with activity summary
  * - GET /violations - Violations list with filtering
  * - GET /history - Session history with filtering
@@ -37,6 +40,14 @@ import { db } from '../db/client.js';
 import { users, serverUsers, servers, sessions, violations, rules } from '../db/schema.js';
 import { getCacheService } from '../services/cache.js';
 import { generateOpenAPIDocument } from './public.openapi.js';
+import {
+  queryPlaysOverTime,
+  queryPlaysByDayOfWeek,
+  queryPlaysByHourOfDay,
+  queryConcurrentStreams,
+  queryPlatforms,
+  queryQualityBreakdown,
+} from './stats/queries.js';
 import { buildPosterUrl, buildAvatarUrl } from '../services/imageProxy.js';
 import { terminateSession } from '../services/termination.js';
 import { getDashboardStats } from '../services/dashboardStats.js';
@@ -872,6 +883,74 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
       timezone,
       redis: app.redis,
     });
+  });
+
+  /**
+   * GET /activity - Playback activity trends and breakdowns
+   *
+   * Consolidated view of six activity datasets: plays over time, concurrent
+   * streams, day-of-week and hour-of-day distributions, platform usage, and
+   * playback quality breakdown.
+   *
+   * Query params:
+   *   - period: 'week' | 'month' | 'year' (default: month)
+   *   - serverId: Optional UUID to filter to a specific server
+   *   - timezone: IANA timezone for date bucketing (default: UTC)
+   */
+  app.get('/activity', { preHandler: [app.authenticatePublicApi] }, async (request, reply) => {
+    const querySchema = z.object({
+      period: z.enum(['week', 'month', 'year']).default('month'),
+      serverId: z.uuid().optional(),
+      timezone: timezoneSchema,
+    });
+
+    const query = querySchema.safeParse(request.query);
+    if (!query.success) {
+      const details = query.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      return reply.badRequest(`Invalid query parameters: ${details}`);
+    }
+
+    const { period, serverId, timezone } = query.data;
+
+    const now = new Date();
+    const durationMs =
+      period === 'week'
+        ? 7 * 24 * 60 * 60 * 1000
+        : period === 'month'
+          ? 30 * 24 * 60 * 60 * 1000
+          : 365 * 24 * 60 * 60 * 1000;
+    const rangeStart = new Date(now.getTime() - durationMs);
+    const bucketInterval = period === 'week' ? '6 hours' : '1 day';
+    const serverFilter = serverId ? sql`AND server_id = ${serverId}` : sql``;
+
+    const [plays, concurrent, byDayOfWeek, byHourOfDay, platforms, quality] = await Promise.all([
+      queryPlaysOverTime({ rangeStart, timezone, bucketInterval, serverFilter }),
+      queryConcurrentStreams({ rangeStart, rangeEnd: now, bucketInterval, serverFilter }),
+      queryPlaysByDayOfWeek({ rangeStart, timezone, serverFilter }),
+      queryPlaysByHourOfDay({ rangeStart, timezone, serverFilter }),
+      queryPlatforms({ rangeStart, serverFilter }),
+      queryQualityBreakdown({ rangeStart, serverFilter }),
+    ]);
+
+    return {
+      period,
+      range: {
+        start: rangeStart.toISOString(),
+        end: now.toISOString(),
+      },
+      plays,
+      concurrent: concurrent.map((r) => ({
+        date: r.hour,
+        total: r.total,
+        direct: r.direct,
+        directStream: r.directStream,
+        transcode: r.transcode,
+      })),
+      byDayOfWeek,
+      byHourOfDay,
+      platforms,
+      quality,
+    };
   });
 
   /**

@@ -325,6 +325,116 @@ registry.registerPath({
 });
 
 // ============================================================================
+// GET /activity
+// ============================================================================
+
+const ActivityPeriodEnum = z.enum(['week', 'month', 'year']);
+
+const ActivityQuery = z.object({
+  period: ActivityPeriodEnum.default('month').openapi({
+    description: 'Time range for activity data',
+    example: 'month',
+  }),
+  serverId: ServerIdParam.optional().openapi({ description: 'Filter by server' }),
+  timezone: z.string().default('UTC').openapi({
+    description: 'IANA timezone for date bucketing',
+    example: 'America/New_York',
+  }),
+});
+
+const PlayDataPoint = z.object({
+  date: z.string().openapi({ description: 'Bucket start time', example: '2026-02-08 00:00:00' }),
+  count: z.number().int().openapi({ example: 45 }),
+});
+
+const ConcurrentDataPoint = z.object({
+  date: z.string().openapi({ description: 'Bucket start time', example: '2026-02-08 00:00:00' }),
+  total: z.number().int().openapi({ example: 7 }),
+  direct: z.number().int().openapi({ description: 'Direct play streams', example: 4 }),
+  directStream: z.number().int().openapi({ description: 'Direct stream (remux)', example: 1 }),
+  transcode: z.number().int().openapi({ example: 2 }),
+});
+
+const DayOfWeekDataPoint = z.object({
+  day: z.number().int().openapi({ description: '0 = Sunday, 6 = Saturday', example: 5 }),
+  name: z.string().openapi({ example: 'Fri' }),
+  count: z.number().int().openapi({ example: 120 }),
+});
+
+const HourOfDayDataPoint = z.object({
+  hour: z.number().int().openapi({ description: '0-23', example: 20 }),
+  count: z.number().int().openapi({ example: 35 }),
+});
+
+const PlatformDataPoint = z.object({
+  platform: z.string().nullable().openapi({ example: 'Chrome' }),
+  count: z.number().int().openapi({ example: 89 }),
+});
+
+const QualityBreakdown = z
+  .object({
+    directPlay: z.number().int().openapi({ example: 234 }),
+    directStream: z.number().int().openapi({ example: 56 }),
+    transcode: z.number().int().openapi({ example: 120 }),
+    total: z.number().int().openapi({ example: 410 }),
+    directPlayPercent: z.number().int().openapi({ description: 'Rounded percentage', example: 57 }),
+    directStreamPercent: z.number().int().openapi({ example: 14 }),
+    transcodePercent: z.number().int().openapi({ example: 29 }),
+  })
+  .openapi('QualityBreakdown');
+
+const ActivityResponse = z
+  .object({
+    period: ActivityPeriodEnum,
+    range: z.object({
+      start: z.iso.datetime().openapi({ example: '2026-02-08T05:00:00.000Z' }),
+      end: z.iso.datetime().openapi({ example: '2026-03-10T14:30:00.000Z' }),
+    }),
+    plays: z.array(PlayDataPoint).openapi({
+      description:
+        'Play counts bucketed over time. Engagement-based: only sessions >= 2 min. ' +
+        'Bucket size is 6 hours for week, 1 day for month/year.',
+    }),
+    concurrent: z.array(ConcurrentDataPoint).openapi({
+      description: 'Peak concurrent streams per time bucket, broken down by playback type.',
+    }),
+    byDayOfWeek: z.array(DayOfWeekDataPoint).openapi({
+      description: 'Play distribution across days of the week. Always 7 entries.',
+    }),
+    byHourOfDay: z.array(HourOfDayDataPoint).openapi({
+      description: 'Play distribution across hours of the day. Always 24 entries.',
+    }),
+    platforms: z.array(PlatformDataPoint).openapi({
+      description: 'Session counts by client platform, sorted by count descending.',
+    }),
+    quality: QualityBreakdown,
+  })
+  .openapi('ActivityResponse');
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/public/activity',
+  tags: ['Public API'],
+  summary: 'Playback activity trends',
+  description:
+    'Consolidated activity data across six dimensions: plays over time, concurrent streams, ' +
+    'day-of-week and hour-of-day distributions, platform usage, and playback quality. ' +
+    'Time-series data is bucketed by 6 hours (week) or 1 day (month/year). ' +
+    'Play counts use engagement-based filtering (sessions >= 2 minutes).',
+  security: [{ bearerAuth: [] }],
+  request: { query: ActivityQuery },
+  responses: {
+    200: {
+      description: 'Activity data retrieved',
+      content: { 'application/json': { schema: ActivityResponse } },
+    },
+    400: { description: 'Invalid query parameters' },
+    401: { description: 'Invalid or missing API key' },
+    500: { description: 'Internal server error' },
+  },
+});
+
+// ============================================================================
 // GET /streams
 // ============================================================================
 

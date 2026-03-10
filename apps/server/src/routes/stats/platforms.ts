@@ -6,13 +6,11 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify';
-import { sql } from 'drizzle-orm';
 import { statsQuerySchema } from '@tracearr/shared';
 import { playsByPlatformSince } from '../../db/prepared.js';
-import { db } from '../../db/client.js';
 import { resolveDateRange } from './utils.js';
-import { MEDIA_TYPE_SQL_FILTER } from '../../constants/index.js';
 import { validateServerAccess, buildServerFilterFragment } from '../../utils/serverFiltering.js';
+import { queryPlatforms } from './queries.js';
 
 export const platformsRoutes: FastifyPluginAsync = async (app) => {
   /**
@@ -29,7 +27,6 @@ export const platformsRoutes: FastifyPluginAsync = async (app) => {
     const authUser = request.user;
     const dateRange = resolveDateRange(period, startDate, endDate);
 
-    // Validate server access if specific server requested
     if (serverId) {
       const error = validateServerAccess(authUser, serverId);
       if (error) {
@@ -40,22 +37,11 @@ export const platformsRoutes: FastifyPluginAsync = async (app) => {
     const serverFilter = buildServerFilterFragment(serverId, authUser);
     const needsServerFilter = serverId || authUser.role !== 'owner';
 
-    // For 'all' period (no start date) OR when server filtering is needed, use raw query
+    // For 'all' period (no start date) OR when server filtering is needed, use shared query
     // Prepared statements don't support dynamic server filtering
     if (!dateRange.start || needsServerFilter) {
-      const result = await db.execute(sql`
-        SELECT
-          platform,
-          COUNT(DISTINCT COALESCE(reference_id, id))::int as count
-        FROM sessions
-        WHERE true
-        ${MEDIA_TYPE_SQL_FILTER}
-        ${serverFilter}
-        ${dateRange.start ? sql`AND started_at >= ${dateRange.start}` : sql``}
-        GROUP BY platform
-        ORDER BY count DESC
-      `);
-      return { data: result.rows as { platform: string; count: number }[] };
+      const data = await queryPlatforms({ rangeStart: dateRange.start, serverFilter });
+      return { data };
     }
 
     // No server filter needed and has date range - use prepared statement for performance
