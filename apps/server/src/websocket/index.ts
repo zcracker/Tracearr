@@ -176,27 +176,27 @@ export function broadcastToServer<K extends keyof ServerToClientEvents>(
 }
 
 /**
- * Force-disconnect a specific mobile device's sockets
+ * Force-disconnect a specific mobile device's sockets.
+ * Scans all connected sockets rather than relying on room membership.
  */
 export function disconnectMobileDevice(deviceId: string): void {
-  if (io) {
-    io.in(`mobile:${deviceId}`).disconnectSockets(true);
+  if (!io) return;
+  for (const [, socket] of io.sockets.sockets) {
+    const user = (socket.data as SocketData).user;
+    if (user?.mobile && user.deviceId === deviceId) {
+      socket.disconnect(true);
+    }
   }
 }
 
 /**
- * Force-disconnect all mobile sockets for a user
+ * Force-disconnect all mobile sockets for a user.
  */
 export function disconnectAllMobileDevices(userId: string): void {
   if (!io) return;
-
-  // Iterate sockets in the user's room and disconnect mobile ones
-  const room = io.sockets.adapter.rooms.get(`user:${userId}`);
-  if (!room) return;
-
-  for (const socketId of room) {
-    const socket = io.sockets.sockets.get(socketId);
-    if (socket && (socket.data as SocketData).user?.mobile) {
+  for (const [, socket] of io.sockets.sockets) {
+    const user = (socket.data as SocketData).user;
+    if (user?.mobile && user.userId === userId) {
       socket.disconnect(true);
     }
   }
