@@ -8,6 +8,7 @@
  */
 
 import {
+  POLLER_CONFIG,
   POLLING_INTERVALS,
   SESSION_LIMITS,
   type ActiveSession,
@@ -1188,27 +1189,37 @@ async function pollServers(): Promise<void> {
           cachedSessions
         );
 
-      // Track health state and notify on transitions
+      // Track health state and notify on transitions (with consecutive-failure threshold)
       if (cacheService) {
-        await cacheService.setServerHealth(server.id, success);
+        if (success) {
+          const wasDown = wasHealthy === false;
+          await cacheService.setServerHealth(server.id, true);
+          await cacheService.resetServerFailCount(server.id);
 
-        // Detect health state transitions
-        if (wasHealthy === true && !success) {
-          // Server went down - notify
-          console.log(`[Poller] Server ${server.name} is DOWN`);
-          await enqueueNotification({
-            type: 'server_down',
-            payload: { serverName: server.name, serverId: server.id },
-          });
-        } else if (wasHealthy === false && success) {
-          // Server came back up - notify
-          console.log(`[Poller] Server ${server.name} is back UP`);
-          await enqueueNotification({
-            type: 'server_up',
-            payload: { serverName: server.name, serverId: server.id },
-          });
+          if (wasDown) {
+            console.log(`[Poller] Server ${server.name} is back UP`);
+            await enqueueNotification({
+              type: 'server_up',
+              payload: { serverName: server.name, serverId: server.id },
+            });
+          }
+        } else {
+          const failCount = await cacheService.incrServerFailCount(server.id);
+
+          if (failCount >= POLLER_CONFIG.DOWN_THRESHOLD) {
+            await cacheService.setServerHealth(server.id, false);
+
+            if (wasHealthy !== false) {
+              console.log(
+                `[Poller] Server ${server.name} is DOWN (${failCount} consecutive failures)`
+              );
+              await enqueueNotification({
+                type: 'server_down',
+                payload: { serverName: server.name, serverId: server.id },
+              });
+            }
+          }
         }
-        // wasHealthy === null means first poll, don't notify
       }
 
       allNewSessions.push(...newSessions);

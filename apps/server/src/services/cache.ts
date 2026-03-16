@@ -44,6 +44,8 @@ export interface CacheService {
   // Server health tracking
   getServerHealth(serverId: string): Promise<boolean | null>;
   setServerHealth(serverId: string, isHealthy: boolean): Promise<void>;
+  incrServerFailCount(serverId: string): Promise<number>;
+  resetServerFailCount(serverId: string): Promise<void>;
 
   // Generic cache operations
   invalidateCache(key: string): Promise<void>;
@@ -398,6 +400,17 @@ export function createCacheService(redis: Redis): CacheService {
         CACHE_TTL.SERVER_HEALTH,
         isHealthy ? 'true' : 'false'
       );
+    },
+
+    async incrServerFailCount(serverId: string): Promise<number> {
+      const key = REDIS_KEYS.SERVER_HEALTH_FAIL_COUNT(serverId);
+      const count = await redis.incr(key);
+      await redis.expire(key, CACHE_TTL.SERVER_HEALTH);
+      return count;
+    },
+
+    async resetServerFailCount(serverId: string): Promise<void> {
+      await redis.del(REDIS_KEYS.SERVER_HEALTH_FAIL_COUNT(serverId));
     },
 
     // Generic cache operations
