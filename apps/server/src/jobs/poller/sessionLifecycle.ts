@@ -1501,18 +1501,15 @@ export async function reEvaluateRulesOnTranscodeChange(
       console.log(
         `[rules] Transcode re-eval: rule "${rule.name}" matched session ${existingSession.id}`
       );
-    }
 
-    // Execute actions (e.g., kill_stream, send_notification)
-    // Runs outside the transaction - side effects shouldn't block violation commit,
-    // and the advisory lock prevents duplicate action execution for the same rule+session.
-    if (result.actions.length > 0) {
-      const context: EvaluationContext = { ...baseContext, rule };
-      const actionResults: ActionResult[] = await executeActions(context, result.actions);
-
-      const violationId =
-        createdViolations.find((v) => v.rule.id === rule.id)?.violation.id ?? null;
-      await storeActionResults(violationId, result.ruleId, actionResults);
+      // Execute actions (e.g., kill_stream, send_notification) only when
+      // a new violation was created. Gating here prevents actions from firing
+      // on subsequent re-evaluations where the dedup check returns null.
+      if (result.actions.length > 0) {
+        const context: EvaluationContext = { ...baseContext, rule };
+        const actionResults: ActionResult[] = await executeActions(context, result.actions);
+        await storeActionResults(violationResult.id, result.ruleId, actionResults);
+      }
     }
   }
 
@@ -1667,6 +1664,16 @@ export async function reEvaluateRulesOnPauseState(
 
       if (existing[0]) return null;
 
+      // Collect related session IDs from evidence
+      const allRelatedSessionIds = new Set<string>();
+      for (const group of result.evidence ?? []) {
+        for (const cond of group.conditions) {
+          for (const id of cond.relatedSessionIds ?? []) {
+            allRelatedSessionIds.add(id);
+          }
+        }
+      }
+
       const insertedViolations = await tx
         .insert(violations)
         .values({
@@ -1677,6 +1684,7 @@ export async function reEvaluateRulesOnPauseState(
           ruleType: null,
           data: {
             evidence: result.evidence,
+            relatedSessionIds: Array.from(allRelatedSessionIds),
             ruleName: rule.name,
             matchedGroups: result.matchedGroups,
             sessionKey: session.sessionKey,
@@ -1706,16 +1714,15 @@ export async function reEvaluateRulesOnPauseState(
       console.log(
         `[rules] Pause re-eval: rule "${rule.name}" matched session ${existingSession.id}`
       );
-    }
 
-    // Execute actions (e.g., kill_stream, send_notification)
-    if (result.actions.length > 0) {
-      const context: EvaluationContext = { ...baseContext, rule };
-      const actionResults: ActionResult[] = await executeActions(context, result.actions);
-
-      const violationId =
-        createdViolations.find((v) => v.rule.id === rule.id)?.violation.id ?? null;
-      await storeActionResults(violationId, result.ruleId, actionResults);
+      // Execute actions (e.g., kill_stream, send_notification) only when
+      // a new violation was created. The dedup check returns null on subsequent
+      // polls — gating here prevents kill_stream from firing every poll cycle.
+      if (result.actions.length > 0) {
+        const context: EvaluationContext = { ...baseContext, rule };
+        const actionResults: ActionResult[] = await executeActions(context, result.actions);
+        await storeActionResults(violationResult.id, result.ruleId, actionResults);
+      }
     }
   }
 

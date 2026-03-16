@@ -306,6 +306,9 @@ function formatConditionActual(condition: ConditionEvidence, unitSystem: UnitSys
     case 'inactive_days':
     case 'account_age_days':
       return typeof actual === 'number' ? `${actual} days` : String(actual);
+    case 'current_pause_minutes':
+    case 'total_pause_minutes':
+      return typeof actual === 'number' ? `${Math.round(actual)} minutes` : String(actual);
     default:
       return String(actual);
   }
