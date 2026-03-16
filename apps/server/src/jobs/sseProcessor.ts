@@ -11,43 +11,43 @@
  * 4. Broadcast updates via WebSocket
  */
 
-import { randomUUID } from 'node:crypto';
-import { eq, and, isNull } from 'drizzle-orm';
 import { SESSION_WRITE_RETRY, type PlexPlaySessionNotification } from '@tracearr/shared';
+import { and, eq, isNull } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import { db } from '../db/client.js';
-import { servers, sessions, serverUsers, users } from '../db/schema.js';
-import { createMediaServerClient } from '../services/mediaServer/index.js';
-import { sseManager } from '../services/sseManager.js';
-import type { CacheService, PubSubService } from '../services/cache.js';
-import { registerService, unregisterService } from '../services/serviceTracker.js';
-import { lookupGeoIP } from '../services/plexGeoip.js';
+import { servers, serverUsers, sessions, users } from '../db/schema.js';
 import { getGeoIPSettings } from '../routes/settings.js';
-import { mapMediaSession, pickStreamDetailFields } from './poller/sessionMapper.js';
+import type { CacheService, PubSubService } from '../services/cache.js';
+import { createMediaServerClient } from '../services/mediaServer/index.js';
 import { extractLiveUuid } from '../services/mediaServer/plex/plexUtils.js';
+import { lookupGeoIP } from '../services/plexGeoip.js';
+import { registerService, unregisterService } from '../services/serviceTracker.js';
+import { sseManager } from '../services/sseManager.js';
+import { enqueueNotification } from './notificationQueue.js';
+import { batchGetRecentUserSessions, getActiveRulesV2 } from './poller/database.js';
+import { triggerReconciliationPoll } from './poller/index.js';
+import {
+  buildActiveSession,
+  buildPendingActiveSession,
+  confirmAndPersistSession,
+  findActiveSession,
+  findActiveSessionsAll,
+  handleMediaChangeAtomic,
+  reEvaluateRulesOnPauseState,
+  reEvaluateRulesOnTranscodeChange,
+  stopSessionAtomic,
+} from './poller/sessionLifecycle.js';
+import { mapMediaSession, pickStreamDetailFields } from './poller/sessionMapper.js';
 import {
   calculatePauseAccumulation,
   checkWatchCompletion,
+  createInitialConfirmationState,
   detectMediaChange,
   isPlaybackConfirmed,
-  createInitialConfirmationState,
   updateConfirmationState,
 } from './poller/stateTracker.js';
-import { getActiveRulesV2, batchGetRecentUserSessions } from './poller/database.js';
-import { broadcastViolations } from './poller/violations.js';
-import {
-  stopSessionAtomic,
-  findActiveSession,
-  findActiveSessionsAll,
-  buildActiveSession,
-  buildPendingActiveSession,
-  handleMediaChangeAtomic,
-  reEvaluateRulesOnTranscodeChange,
-  reEvaluateRulesOnPauseState,
-  confirmAndPersistSession,
-} from './poller/sessionLifecycle.js';
 import type { PendingSessionData } from './poller/types.js';
-import { enqueueNotification } from './notificationQueue.js';
-import { triggerReconciliationPoll } from './poller/index.js';
+import { broadcastViolations } from './poller/violations.js';
 
 let cacheService: CacheService | null = null;
 let pubSubService: PubSubService | null = null;
@@ -1296,6 +1296,20 @@ async function updatePendingSession(
       lastSeenAt: now,
     };
     await cacheService.setPendingSession(serverId, sessionKey, updatedData);
+
+    if (previousState !== newState) {
+      const cached = await cacheService.getSessionById(pendingData.id);
+      if (cached) {
+        cached.state = newState;
+        cached.lastPausedAt = lastPausedAt ? new Date(lastPausedAt) : null;
+        cached.pausedDurationMs = pausedDurationMs;
+        await cacheService.updateActiveSession(cached);
+
+        if (pubSubService) {
+          await pubSubService.publish('session:updated', cached);
+        }
+      }
+    }
   }
 }
 
