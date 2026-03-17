@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useParams, Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,11 +7,14 @@ import { TrustScoreBadge } from '@/components/users/TrustScoreBadge';
 import { UserLocationsCard } from '@/components/users/UserLocationsCard';
 import { UserDevicesCard } from '@/components/users/UserDevicesCard';
 import { EditUserNameDialog } from '@/components/users/EditUserNameDialog';
+import { EditTrustScoreDialog } from '@/components/users/EditTrustScoreDialog';
+import { SessionDetailSheet } from '@/components/history/SessionDetailSheet';
+import { HistoryTable } from '@/components/history/HistoryTable';
+import type { ColumnVisibility } from '@/components/history/HistoryFilters';
 import { SeverityBadge } from '@/components/violations/SeverityBadge';
-import { ActiveSessionBadge } from '@/components/sessions/ActiveSessionBadge';
 import { getAvatarUrl } from '@/components/users/utils';
-import { getCountryName, getMediaDisplay } from '@/lib/utils';
-import { formatDuration } from '@/lib/formatters';
+import { getMediaDisplay } from '@/lib/utils';
+import { api } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -22,8 +25,6 @@ import {
   Play,
   Clock,
   AlertTriangle,
-  Tv,
-  Globe,
   XCircle,
   Bot,
   Pencil,
@@ -31,7 +32,7 @@ import {
 import { formatDistanceToNow, format } from 'date-fns';
 import type { ColumnDef } from '@tanstack/react-table';
 import type {
-  Session,
+  SessionWithDetails,
   ViolationSummary,
   ViolationWithDetails,
   TerminationLogWithDetails,
@@ -50,96 +51,37 @@ export function UserDetail() {
   const [violationsPage, setViolationsPage] = useState(1);
   const [terminationsPage, setTerminationsPage] = useState(1);
   const [isEditNameOpen, setIsEditNameOpen] = useState(false);
+  const [isEditTrustOpen, setIsEditTrustOpen] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<SessionWithDetails | null>(null);
   const pageSize = 10;
-  const { selectedServerId } = useServer();
+  const { selectedServerId, servers } = useServer();
   const { user: authUser } = useAuth();
   const isOwner = authUser?.role === 'owner';
 
-  // Column definitions with translations
-  const sessionColumns: ColumnDef<Session>[] = useMemo(
-    () => [
-      {
-        accessorKey: 'mediaTitle',
-        header: t('common:labels.media'),
-        cell: ({ row }) => {
-          const { title, subtitle } = getMediaDisplay(row.original);
-          return (
-            <div className="max-w-[200px]">
-              <p className="truncate font-medium">{title}</p>
-              {subtitle ? (
-                <p className="text-muted-foreground text-xs">{subtitle}</p>
-              ) : (
-                <p className="text-muted-foreground text-xs capitalize">{row.original.mediaType}</p>
-              )}
-            </div>
-          );
-        },
-      },
-      {
-        accessorKey: 'state',
-        header: t('common:labels.status'),
-        cell: ({ row }) => <ActiveSessionBadge state={row.original.state} />,
-      },
-      {
-        accessorKey: 'durationMs',
-        header: t('common:labels.duration'),
-        cell: ({ row }) => (
-          <span className="text-sm">
-            {formatDuration(row.original.durationMs, { style: 'compact' })}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'platform',
-        header: t('common:labels.platform'),
-        cell: ({ row }) => (
-          <div className="flex items-center gap-2 text-sm">
-            <Tv className="text-muted-foreground h-4 w-4" />
-            <span>{row.original.platform ?? t('common:labels.unknown')}</span>
-          </div>
-        ),
-      },
-      {
-        accessorKey: 'ipAddress',
-        header: t('common:labels.ipAddress'),
-        cell: ({ row }) => (
-          <span className="text-sm">{row.original.ipAddress ?? t('common:labels.unknown')}</span>
-        ),
-      },
-      {
-        accessorKey: 'geoCity',
-        header: t('common:labels.location'),
-        cell: ({ row }) => {
-          const session = row.original;
-          if (!session.geoCity && !session.geoCountry) {
-            return <span className="text-muted-foreground">—</span>;
-          }
-          return (
-            <div className="flex items-center gap-2 text-sm">
-              <Globe className="text-muted-foreground h-4 w-4" />
-              <span>
-                {session.geoCity && `${session.geoCity}, `}
-                {getCountryName(session.geoCountry) ?? ''}
-              </span>
-            </div>
-          );
-        },
-      },
-      {
-        accessorKey: 'startedAt',
-        header: t('common:labels.started'),
-        cell: ({ row }) => (
-          <div className="flex items-center gap-2 text-sm">
-            <Clock className="text-muted-foreground h-4 w-4" />
-            <span>
-              {formatDistanceToNow(new Date(row.original.startedAt), { addSuffix: true })}
-            </span>
-          </div>
-        ),
-      },
-    ],
-    [t]
+  // Column visibility for the sessions HistoryTable (hide user since we're scoped to one)
+  const sessionColumnVisibility: ColumnVisibility = useMemo(
+    () => ({
+      date: true,
+      user: false,
+      content: true,
+      platform: true,
+      location: true,
+      ip: false,
+      quality: true,
+      duration: true,
+      progress: true,
+    }),
+    []
   );
+
+  const handleSessionClick = useCallback(async (session: SessionWithDetails) => {
+    try {
+      const full = await api.sessions.get(session.id);
+      setSelectedSession(full);
+    } catch {
+      setSelectedSession(session);
+    }
+  }, []);
 
   const violationColumns: ColumnDef<ViolationRow>[] = useMemo(
     () => [
@@ -309,9 +251,30 @@ export function UserDetail() {
   const devices = fullData?.devices ?? [];
 
   // Sessions: use paginated data if on page > 1, otherwise use aggregate
-  const sessions = needsPaginatedSessions
+  const rawSessions = needsPaginatedSessions
     ? (paginatedSessions?.data ?? [])
     : (fullData?.sessions.data ?? []);
+
+  // Map Session → SessionWithDetails for HistoryTable compatibility
+  const sessions: SessionWithDetails[] = useMemo(() => {
+    if (!user) return [];
+    const server = servers.find((s) => s.id === user.serverId);
+    return rawSessions.map((s) => ({
+      ...s,
+      user: {
+        id: user.id,
+        username: user.username,
+        thumbUrl: user.thumbUrl,
+        identityName: user.identityName ?? null,
+      },
+      server: {
+        id: user.serverId,
+        name: user.serverName ?? '',
+        type: server?.type ?? 'plex',
+      },
+    }));
+  }, [rawSessions, user, servers]);
+
   const sessionsTotal = needsPaginatedSessions
     ? (paginatedSessions?.total ?? fullData?.sessions.total ?? 0)
     : (fullData?.sessions.total ?? 0);
@@ -445,6 +408,17 @@ export function UserDetail() {
                   <div className="flex items-center gap-4 pt-2">
                     <TrustScoreBadge score={user.trustScore} showLabel />
                   </div>
+                  {isOwner && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 w-fit"
+                      onClick={() => setIsEditTrustOpen(true)}
+                    >
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Adjust Trust Score
+                    </Button>
+                  )}
                 </div>
                 <div className="text-muted-foreground flex flex-col gap-2 text-right text-sm">
                   <div className="flex items-center gap-2">
@@ -526,17 +500,35 @@ export function UserDetail() {
           <CardTitle>{t('common:labels.recentSessions')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <DataTable
-            columns={sessionColumns}
-            data={sessions}
-            pageSize={pageSize}
-            pageCount={sessionsTotalPages}
-            page={sessionsPage}
-            onPageChange={setSessionsPage}
+          <HistoryTable
+            sessions={sessions}
             isLoading={sessionsLoading}
-            isServerFiltered
-            emptyMessage={t('userDetail.noSessionsFound')}
+            onSessionClick={handleSessionClick}
+            columnVisibility={sessionColumnVisibility}
           />
+          {sessionsTotalPages > 1 && (
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSessionsPage((p) => Math.max(1, p - 1))}
+                disabled={sessionsPage <= 1}
+              >
+                Previous
+              </Button>
+              <span className="text-muted-foreground text-sm">
+                {sessionsPage} / {sessionsTotalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSessionsPage((p) => Math.min(sessionsTotalPages, p + 1))}
+                disabled={sessionsPage >= sessionsTotalPages}
+              >
+                Next
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -590,6 +582,24 @@ export function UserDetail() {
         userId={id!}
         currentName={user.identityName}
         username={user.username}
+      />
+
+      {/* Edit Trust Score Dialog */}
+      <EditTrustScoreDialog
+        open={isEditTrustOpen}
+        onOpenChange={setIsEditTrustOpen}
+        userId={id!}
+        currentScore={user.trustScore}
+        username={user.username}
+      />
+
+      {/* Session Detail Sheet */}
+      <SessionDetailSheet
+        session={selectedSession}
+        open={!!selectedSession}
+        onOpenChange={(open) => {
+          if (!open) setSelectedSession(null);
+        }}
       />
     </div>
   );

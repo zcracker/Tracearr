@@ -52,8 +52,9 @@ export function useUpdateUser() {
     onSuccess: (data, variables) => {
       // Update user in cache
       queryClient.setQueryData(['users', 'detail', variables.id], data);
-      // Invalidate users list
+      // Invalidate users list and full user detail
       void queryClient.invalidateQueries({ queryKey: ['users', 'list'] });
+      void queryClient.invalidateQueries({ queryKey: ['users', 'full', variables.id] });
     },
   });
 }
