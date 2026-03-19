@@ -602,9 +602,8 @@ export class LibrarySyncService {
 
     if (showCount > 0 && episodeCount === 0) {
       console.warn(
-        `[LibrarySync] Skipping snapshot for ${libraryName}: has ${showCount} shows but no episodes (likely incomplete sync)`
+        `[LibrarySync] Skipping snapshot for ${libraryName}: has ${showCount} shows but no episodes (likely incomplete sync). Not saving sync state — next cycle will retry.`
       );
-      await this.saveSyncState(serverId, libraryId, totalCount);
       return {
         serverId,
         libraryId,
@@ -618,9 +617,8 @@ export class LibrarySyncService {
 
     if (artistCount > 0 && trackCount === 0) {
       console.warn(
-        `[LibrarySync] Skipping snapshot for ${libraryName}: has ${artistCount} artists but no tracks (likely incomplete sync)`
+        `[LibrarySync] Skipping snapshot for ${libraryName}: has ${artistCount} artists but no tracks (likely incomplete sync). Not saving sync state — next cycle will retry.`
       );
-      await this.saveSyncState(serverId, libraryId, totalCount);
       return {
         serverId,
         libraryId,
