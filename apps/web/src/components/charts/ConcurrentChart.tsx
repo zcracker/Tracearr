@@ -3,6 +3,7 @@ import Highcharts from 'highcharts';
 import HighchartsReact from 'highcharts-react-official';
 import { getHour12 } from '@/lib/timeFormat';
 import { ChartSkeleton } from '@/components/ui/skeleton';
+import { parseChartDate } from './chartUtils';
 
 interface ConcurrentData {
   hour: string;
@@ -30,6 +31,8 @@ export function ConcurrentChart({
       return {};
     }
 
+    const timestamps = data.map((d) => parseChartDate(d.hour));
+
     return {
       chart: {
         type: 'area',
@@ -50,7 +53,7 @@ export function ConcurrentChart({
         enabled: true,
         align: 'right',
         verticalAlign: 'top',
-        floating: true,
+        floating: false,
         itemStyle: {
           color: 'hsl(var(--muted-foreground))',
           fontWeight: 'normal',
@@ -61,36 +64,24 @@ export function ConcurrentChart({
         },
       },
       xAxis: {
-        categories: data.map((d) => d.hour),
+        type: 'datetime',
+        tickPixelInterval: 120,
+        dateTimeLabelFormats: {
+          hour: getHour12() ? '%l %p' : '%k:%M',
+          day: '%b %e',
+          week: '%b %e',
+          month: `%b '%y`,
+          year: '%Y',
+        },
         labels: {
           style: {
             color: 'hsl(var(--muted-foreground))',
           },
-          formatter: function () {
-            const categories = this.axis.categories;
-            const categoryValue =
-              typeof this.value === 'number' ? categories[this.value] : this.value;
-            if (!categoryValue) return '';
-            // PostgreSQL: "2026-01-28 05:00:00+00" -> JS needs "2026-01-28T05:00:00+00:00"
-            const normalized = categoryValue.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
-            const date = new Date(normalized);
-            if (isNaN(date.getTime())) return '';
-
-            if (period === 'year' || period === 'all') {
-              return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-            }
-            if (period === 'day') {
-              // Hourly - show time only
-              return date.toLocaleTimeString('en-US', { hour: 'numeric', hour12: getHour12() });
-            }
-            // week (6-hour) / month (daily): M/D format
-            return `${date.getMonth() + 1}/${date.getDate()}`;
-          },
-          // Show ~7 labels for week, ~8 for day, ~12 for others
-          step: Math.ceil(data.length / (period === 'week' ? 7 : period === 'day' ? 8 : 12)),
         },
         lineColor: 'hsl(var(--border))',
         tickColor: 'hsl(var(--border))',
+        startOnTick: false,
+        endOnTick: false,
       },
       yAxis: {
         title: {
@@ -135,29 +126,20 @@ export function ConcurrentChart({
         shared: true,
         formatter: function () {
           const points = this.points || [];
-          // Get category from axis using x index
-          const categories = points[0]?.series?.xAxis?.categories;
-          const xIndex = typeof this.x === 'number' ? this.x : 0;
-          const categoryValue = categories?.[xIndex];
-          // PostgreSQL: "2026-01-28 05:00:00+00" -> JS needs "2026-01-28T05:00:00+00:00"
-          const normalized = categoryValue?.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
-          const date = normalized ? new Date(normalized) : null;
+          const date = new Date(this.x);
 
           let dateStr = 'Unknown';
-          if (date && !isNaN(date.getTime())) {
-            if (period === 'all') {
-              dateStr = `Week of ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-            } else if (period === 'year' || period === 'month') {
-              // Daily buckets - just show date
-              dateStr = date.toLocaleDateString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-              });
-            } else {
-              // day (hourly) or week (6-hour) - show date and time
-              dateStr = `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${date.toLocaleTimeString('en-US', { hour: 'numeric', hour12: getHour12() })}`;
-            }
+          if (period === 'all') {
+            dateStr = `Week of ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+          } else if (period === 'year' || period === 'month') {
+            dateStr = date.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+          } else {
+            // day (hourly) or week (6-hour)
+            dateStr = `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${date.toLocaleTimeString('en-US', { hour: 'numeric', hour12: getHour12() })}`;
           }
           let html = `<b>${dateStr}</b>`;
 
@@ -175,7 +157,7 @@ export function ConcurrentChart({
         {
           type: 'area',
           name: 'Direct Play',
-          data: data.map((d) => d.direct),
+          data: data.map((d, i) => [timestamps[i]!, d.direct]),
           color: 'hsl(var(--chart-2))',
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -188,7 +170,7 @@ export function ConcurrentChart({
         {
           type: 'area',
           name: 'Direct Stream',
-          data: data.map((d) => d.directStream),
+          data: data.map((d, i) => [timestamps[i]!, d.directStream]),
           color: 'hsl(210, 76%, 50%)',
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -201,7 +183,7 @@ export function ConcurrentChart({
         {
           type: 'area',
           name: 'Transcode',
-          data: data.map((d) => d.transcode),
+          data: data.map((d, i) => [timestamps[i]!, d.transcode]),
           color: 'hsl(var(--chart-4))',
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -220,7 +202,6 @@ export function ConcurrentChart({
             },
             chartOptions: {
               legend: {
-                floating: false,
                 align: 'center',
                 verticalAlign: 'bottom',
                 itemStyle: {

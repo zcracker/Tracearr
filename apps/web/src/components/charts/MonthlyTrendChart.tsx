@@ -12,6 +12,13 @@ interface MonthlyTrendChartProps {
   height?: number;
 }
 
+function parseMonth(monthStr: string): number {
+  const parts = monthStr.split('-');
+  const year = parseInt(parts[0] ?? '2020');
+  const month = parseInt(parts[1] ?? '1') - 1;
+  return new Date(year, month, 1).getTime();
+}
+
 const formatMonth = (monthStr: string): string => {
   const parts = monthStr.split('-');
   const year = parts[0] ?? '2020';
@@ -46,7 +53,12 @@ export function MonthlyTrendChart({ data, isLoading, height = 250 }: MonthlyTren
         enabled: false,
       },
       xAxis: {
-        categories: data.map((d) => formatMonth(d.month)),
+        type: 'datetime',
+        tickPixelInterval: 100,
+        dateTimeLabelFormats: {
+          month: `%b '%y`,
+          year: '%Y',
+        },
         labels: {
           style: {
             color: 'hsl(var(--muted-foreground))',
@@ -54,6 +66,8 @@ export function MonthlyTrendChart({ data, isLoading, height = 250 }: MonthlyTren
         },
         lineColor: 'hsl(var(--border))',
         tickColor: 'hsl(var(--border))',
+        startOnTick: false,
+        endOnTick: false,
       },
       yAxis: {
         title: {
@@ -91,10 +105,10 @@ export function MonthlyTrendChart({ data, isLoading, height = 250 }: MonthlyTren
           color: 'hsl(var(--popover-foreground))',
         },
         formatter: function () {
-          // Find the data point by matching the formatted month
-          const xValue = String(this.x);
-          const item = data.find((d) => formatMonth(d.month) === xValue);
-          const monthLabel = item ? formatMonth(item.month) : xValue;
+          const date = new Date(this.x);
+          const monthStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+          const item = data.find((d) => d.month === monthStr);
+          const monthLabel = item ? formatMonth(item.month) : formatMonth(monthStr);
           const uniqueItems = item?.uniqueItems ?? 0;
           return `<b>${monthLabel}</b><br/>Watches: ${this.y}<br/>Unique Items: ${uniqueItems}`;
         },
@@ -103,7 +117,7 @@ export function MonthlyTrendChart({ data, isLoading, height = 250 }: MonthlyTren
         {
           type: 'line',
           name: 'Watch Count',
-          data: data.map((d) => d.watchCount),
+          data: data.map((d) => [parseMonth(d.month), d.watchCount]),
         },
       ],
       responsive: {

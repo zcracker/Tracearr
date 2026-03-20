@@ -210,7 +210,7 @@ export function StoragePredictionChart({
         enabled: predictionPoints.length > 0,
         align: 'right',
         verticalAlign: 'top',
-        floating: true,
+        floating: false,
         itemStyle: {
           color: 'hsl(var(--muted-foreground))',
           fontWeight: 'normal',

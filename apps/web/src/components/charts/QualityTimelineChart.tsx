@@ -5,6 +5,7 @@ import type { LibraryQualityResponse } from '@tracearr/shared';
 import { ChartSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/library';
 import { BarChart3 } from 'lucide-react';
+import { parseChartDate } from './chartUtils';
 
 // Quality-based colors: higher quality = cooler/more vibrant colors
 // Visual hierarchy helps users quickly see quality distribution
@@ -22,12 +23,7 @@ interface QualityTimelineChartProps {
   period?: string;
 }
 
-export function QualityTimelineChart({
-  data,
-  isLoading,
-  height = 250,
-  period = '30d',
-}: QualityTimelineChartProps) {
+export function QualityTimelineChart({ data, isLoading, height = 250 }: QualityTimelineChartProps) {
   const options = useMemo<Highcharts.Options>(() => {
     if (!data?.data || data.data.length === 0) {
       return {};
@@ -53,7 +49,7 @@ export function QualityTimelineChart({
         enabled: true,
         align: 'right',
         verticalAlign: 'top',
-        floating: true,
+        floating: false,
         itemStyle: {
           color: 'hsl(var(--muted-foreground))',
           fontWeight: 'normal',
@@ -64,38 +60,25 @@ export function QualityTimelineChart({
         },
       },
       xAxis: {
-        categories: data.data.map((d) => d.day),
+        type: 'datetime',
+        tickPixelInterval: 120,
+        dateTimeLabelFormats: {
+          day: '%b %e',
+          week: '%b %e',
+          month: `%b '%y`,
+          year: '%Y',
+        },
         labels: {
-          enabled: true,
           style: {
             color: 'hsl(var(--muted-foreground))',
             fontSize: '11px',
           },
-          formatter: function () {
-            const categories = this.axis.categories;
-            const categoryValue =
-              typeof this.value === 'number' ? categories[this.value] : this.value;
-            if (!categoryValue) return '';
-            const date = new Date(
-              categoryValue.includes('T') ? categoryValue : categoryValue + 'T00:00:00'
-            );
-            if (isNaN(date.getTime())) return '';
-            // Include year for longer time periods to differentiate labels
-            const options: Intl.DateTimeFormatOptions =
-              period === '1y' || period === 'year' || period === 'all'
-                ? { month: 'short', year: '2-digit' }
-                : { month: 'short', day: 'numeric' };
-            return date.toLocaleDateString('en-US', options);
-          },
-          rotation: 0,
-          // Show ~6-8 labels regardless of data density
-          step: Math.max(1, Math.floor(data.data.length / 7)),
         },
         lineColor: 'hsl(var(--border))',
         tickColor: 'hsl(var(--border))',
         tickLength: 5,
-        showFirstLabel: true,
-        showLastLabel: true,
+        startOnTick: false,
+        endOnTick: false,
       },
       yAxis: {
         title: {
@@ -155,22 +138,14 @@ export function QualityTimelineChart({
         shared: true,
         formatter: function () {
           const points = this.points || [];
-          const xIndex = typeof this.x === 'number' ? this.x : 0;
-          const categories = this.points?.[0]?.series.xAxis.categories || [];
-          const categoryValue = categories[xIndex] as string | undefined;
-          const date = categoryValue
-            ? new Date(categoryValue.includes('T') ? categoryValue : categoryValue + 'T00:00:00')
-            : null;
-          const dateStr =
-            date && !isNaN(date.getTime())
-              ? date.toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric',
-                })
-              : '';
+          const date = new Date(this.x);
+          const dateStr = date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
 
-          let html = dateStr ? `<b>${dateStr}</b>` : '';
+          let html = `<b>${dateStr}</b>`;
           let total = 0;
           points.forEach((point) => {
             total += point.y || 0;
@@ -190,7 +165,7 @@ export function QualityTimelineChart({
         {
           type: 'area',
           name: 'SD',
-          data: data.data.map((d) => d.countSd),
+          data: data.data.map((d) => [parseChartDate(d.day), d.countSd]),
           color: QUALITY_COLORS['SD'],
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -203,7 +178,7 @@ export function QualityTimelineChart({
         {
           type: 'area',
           name: '720p',
-          data: data.data.map((d) => d.count720p),
+          data: data.data.map((d) => [parseChartDate(d.day), d.count720p]),
           color: QUALITY_COLORS['720p'],
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -216,7 +191,7 @@ export function QualityTimelineChart({
         {
           type: 'area',
           name: '1080p',
-          data: data.data.map((d) => d.count1080p),
+          data: data.data.map((d) => [parseChartDate(d.day), d.count1080p]),
           color: QUALITY_COLORS['1080p'],
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -229,7 +204,7 @@ export function QualityTimelineChart({
         {
           type: 'area',
           name: '4K',
-          data: data.data.map((d) => d.count4k),
+          data: data.data.map((d) => [parseChartDate(d.day), d.count4k]),
           color: QUALITY_COLORS['4K'],
           fillColor: {
             linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
@@ -248,7 +223,6 @@ export function QualityTimelineChart({
             },
             chartOptions: {
               legend: {
-                floating: false,
                 align: 'center',
                 verticalAlign: 'bottom',
                 itemStyle: {
@@ -260,7 +234,6 @@ export function QualityTimelineChart({
                   style: {
                     fontSize: '9px',
                   },
-                  step: Math.ceil(data.data.length / 6),
                 },
               },
               yAxis: {
@@ -275,7 +248,7 @@ export function QualityTimelineChart({
         ],
       },
     };
-  }, [data, height, period]);
+  }, [data, height]);
 
   if (isLoading) {
     return <ChartSkeleton height={height} />;

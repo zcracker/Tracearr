@@ -5,6 +5,7 @@ import type { LibraryGrowthResponse, GrowthDataPoint } from '@tracearr/shared';
 import { ChartSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/library';
 import { TrendingUp } from 'lucide-react';
+import { parseChartDate } from './chartUtils';
 
 interface LibraryGrowthChartProps {
   data: LibraryGrowthResponse | undefined;
@@ -93,31 +94,27 @@ function calculateYAxisRange(
   return { min: yMin, max: yMax };
 }
 
-export function LibraryGrowthChart({
-  data,
-  isLoading,
-  height = 250,
-  period = '30d',
-}: LibraryGrowthChartProps) {
+export function LibraryGrowthChart({ data, isLoading, height = 250 }: LibraryGrowthChartProps) {
   const options = useMemo<Highcharts.Options>(() => {
     if (!data) return {};
 
     const allDates = getAllDates(data);
     if (allDates.length === 0) return {};
 
-    const moviesData = alignSeries(data.movies, allDates);
-    const episodesData = alignSeries(data.episodes, allDates);
-    const musicData = alignSeries(data.music, allDates);
+    const allTimestamps = allDates.map(parseChartDate);
+    const moviesValues = alignSeries(data.movies, allDates);
+    const episodesValues = alignSeries(data.episodes, allDates);
+    const musicValues = alignSeries(data.music, allDates);
 
     // Check if we have any non-zero data
-    const hasMovies = moviesData.some((v) => v > 0);
-    const hasEpisodes = episodesData.some((v) => v > 0);
-    const hasMusic = musicData.some((v) => v > 0);
+    const hasMovies = moviesValues.some((v) => v > 0);
+    const hasEpisodes = episodesValues.some((v) => v > 0);
+    const hasMusic = musicValues.some((v) => v > 0);
 
     if (!hasMovies && !hasEpisodes && !hasMusic) return {};
 
     // Calculate Y-axis range for better visualization
-    const yRange = calculateYAxisRange(moviesData, episodesData, musicData);
+    const yRange = calculateYAxisRange(moviesValues, episodesValues, musicValues);
 
     const series: Highcharts.SeriesOptionsType[] = [];
 
@@ -125,7 +122,7 @@ export function LibraryGrowthChart({
       series.push({
         type: 'area',
         name: 'Movies',
-        data: moviesData,
+        data: allTimestamps.map((ts, i) => [ts, moviesValues[i] ?? 0]),
         color: SERIES_COLORS.movies,
         fillOpacity: 0.2,
         marker: { enabled: false, states: { hover: { enabled: true, radius: 4 } } },
@@ -136,7 +133,7 @@ export function LibraryGrowthChart({
       series.push({
         type: 'area',
         name: 'Episodes',
-        data: episodesData,
+        data: allTimestamps.map((ts, i) => [ts, episodesValues[i] ?? 0]),
         color: SERIES_COLORS.episodes,
         fillOpacity: 0.2,
         marker: { enabled: false, states: { hover: { enabled: true, radius: 4 } } },
@@ -147,7 +144,7 @@ export function LibraryGrowthChart({
       series.push({
         type: 'area',
         name: 'Music',
-        data: musicData,
+        data: allTimestamps.map((ts, i) => [ts, musicValues[i] ?? 0]),
         color: SERIES_COLORS.music,
         fillOpacity: 0.2,
         marker: { enabled: false, states: { hover: { enabled: true, radius: 4 } } },
@@ -178,28 +175,21 @@ export function LibraryGrowthChart({
         },
       },
       xAxis: {
-        categories: allDates,
+        type: 'datetime',
+        tickPixelInterval: 120,
+        dateTimeLabelFormats: {
+          day: '%b %e',
+          week: '%b %e',
+          month: `%b '%y`,
+          year: '%Y',
+        },
         labels: {
           style: { color: 'hsl(var(--muted-foreground))' },
-          formatter: function () {
-            const categories = this.axis.categories;
-            const categoryValue =
-              typeof this.value === 'number' ? categories[this.value] : this.value;
-            if (!categoryValue) return '';
-            const date = new Date(
-              categoryValue.includes('T') ? categoryValue : categoryValue + 'T00:00:00'
-            );
-            if (isNaN(date.getTime())) return '';
-            // Include year for longer time periods to differentiate labels
-            if (period === '1y' || period === 'year' || period === 'all') {
-              return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-            }
-            return `${date.getMonth() + 1}/${date.getDate()}`;
-          },
-          step: Math.ceil(allDates.length / 12),
         },
         lineColor: 'hsl(var(--border))',
         tickColor: 'hsl(var(--border))',
+        startOnTick: false,
+        endOnTick: false,
       },
       yAxis: {
         title: { text: undefined },
@@ -224,19 +214,12 @@ export function LibraryGrowthChart({
           const points = this.points;
           if (!points || points.length === 0) return '';
 
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const categoryValue = (points[0] as any).point?.category as string | undefined;
-          const date = categoryValue
-            ? new Date(categoryValue.includes('T') ? categoryValue : categoryValue + 'T00:00:00')
-            : null;
-          const dateStr =
-            date && !isNaN(date.getTime())
-              ? date.toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric',
-                })
-              : 'Unknown';
+          const date = new Date(this.x);
+          const dateStr = date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
 
           let html = `<b>${dateStr}</b>`;
           for (const point of points) {
@@ -257,7 +240,6 @@ export function LibraryGrowthChart({
               xAxis: {
                 labels: {
                   style: { fontSize: '9px' },
-                  step: Math.ceil(allDates.length / 6),
                 },
               },
               yAxis: { labels: { style: { fontSize: '9px' } } },
@@ -266,7 +248,7 @@ export function LibraryGrowthChart({
         ],
       },
     };
-  }, [data, height, period]);
+  }, [data, height]);
 
   if (isLoading) {
     return <ChartSkeleton height={height} />;
