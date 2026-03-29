@@ -64,7 +64,7 @@ export interface SessionIdentity {
 export interface CompositeSessionIdentity {
   serverId: string;
   serverUserId: string;
-  deviceId: string;
+  deviceId: string | null;
   ratingKey: string;
 }
 
@@ -356,6 +356,8 @@ export interface QualityChangeResult {
     id: string;
     serverUserId: string;
     sessionKey: string;
+    deviceId: string | null;
+    ratingKey: string | null;
   };
   /** Reference ID for the session chain */
   referenceId: string;

@@ -21,8 +21,8 @@ import { serverUsers, sessions, violations } from '../../db/schema.js';
 import type { GeoLocation } from '../../services/geoip.js';
 import {
   evaluateRulesAsync,
-  hasTranscodeConditions,
   hasPauseConditions,
+  hasTranscodeConditions,
 } from '../../services/rules/engine.js';
 import { executeActions, type ActionResult } from '../../services/rules/executors/index.js';
 import { resolveTargetSessions } from '../../services/rules/executors/targeting.js';
@@ -38,6 +38,7 @@ import type {
   CompositeSessionIdentity,
   MediaChangeInput,
   MediaChangeResult,
+  PauseReEvalInput,
   PendingSessionData,
   QualityChangeResult,
   SessionCreationInput,
@@ -46,7 +47,6 @@ import type {
   SessionStopInput,
   SessionStopResult,
   TranscodeReEvalInput,
-  PauseReEvalInput,
 } from './types.js';
 import type { ViolationInsertResult } from './violations.js';
 
@@ -419,7 +419,7 @@ export async function findActiveSessionByComposite(
       and(
         eq(sessions.serverId, serverId),
         eq(sessions.serverUserId, serverUserId),
-        eq(sessions.deviceId, deviceId),
+        deviceId ? eq(sessions.deviceId, deviceId) : isNull(sessions.deviceId),
         eq(sessions.ratingKey, ratingKey),
         isNull(sessions.stoppedAt),
         gte(sessions.startedAt, chunkBound)
@@ -486,10 +486,14 @@ export async function createSessionWithRulesAtomic(
   let referenceId: string | null = null;
   let qualityChange: QualityChangeResult | null = null;
 
-  // STEP 1: Check for quality change (active session with same user+ratingKey)
+  // STEP 1: Check for quality change (active session with same user+device+ratingKey)
   if (processed.ratingKey) {
     // Time bound reduces TimescaleDB chunk scanning (only recent chunks can have active sessions)
     const chunkBound = new Date(Date.now() - ACTIVE_SESSION_CHUNK_BOUND_MS);
+
+    const deviceCondition = processed.deviceId
+      ? eq(sessions.deviceId, processed.deviceId)
+      : isNull(sessions.deviceId);
 
     const activeSameContent = await db
       .select()
@@ -498,6 +502,7 @@ export async function createSessionWithRulesAtomic(
         and(
           eq(sessions.serverUserId, serverUser.id),
           eq(sessions.ratingKey, processed.ratingKey),
+          deviceCondition,
           isNull(sessions.stoppedAt),
           gte(sessions.startedAt, chunkBound)
         )
@@ -530,6 +535,8 @@ export async function createSessionWithRulesAtomic(
             id: existingActiveSession.id,
             serverUserId: existingActiveSession.serverUserId,
             sessionKey: existingActiveSession.sessionKey,
+            deviceId: existingActiveSession.deviceId,
+            ratingKey: existingActiveSession.ratingKey,
           },
           referenceId,
         };

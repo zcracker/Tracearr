@@ -29,6 +29,7 @@ import { sseManager } from '../../services/sseManager.js';
 
 import { enqueueNotification } from '../notificationQueue.js';
 import { batchGetRecentUserSessions, getActiveRulesV2 } from './database.js';
+import { updatePendingSession } from './pendingConfirmation.js';
 import {
   buildActiveSession,
   buildPendingActiveSession,
@@ -37,8 +38,8 @@ import {
   findActiveSessionByComposite,
   handleMediaChangeAtomic,
   processPollResults,
-  reEvaluateRulesOnTranscodeChange,
   reEvaluateRulesOnPauseState,
+  reEvaluateRulesOnTranscodeChange,
   stopSessionAtomic,
 } from './sessionLifecycle.js';
 import { mapMediaSession, pickStreamDetailFields } from './sessionMapper.js';
@@ -50,9 +51,8 @@ import {
   shouldForceStopStaleSession,
   shouldWriteToDb,
 } from './stateTracker.js';
-import { DB_WRITE_FLUSH_INTERVAL_MS } from './types.js';
 import type { PollerConfig, ServerProcessingResult, ServerWithToken } from './types.js';
-import { updatePendingSession } from './pendingConfirmation.js';
+import { DB_WRITE_FLUSH_INTERVAL_MS } from './types.js';
 import { broadcastViolations } from './violations.js';
 
 // ============================================================================
@@ -170,7 +170,7 @@ async function sweepGracePeriod(
           ? await findActiveSessionByComposite({
               serverId,
               serverUserId: snapshot.serverUserId,
-              deviceId: snapshot.deviceId || snapshot.sessionKey,
+              deviceId: snapshot.deviceId || null,
               ratingKey: snapshot.ratingKey ?? '',
             })
           : await findActiveSession({ serverId, sessionKey: snapshot.sessionKey });
@@ -575,7 +575,15 @@ async function processServerSessions(
               }
 
               // Prevent "stale" detection for this session
-              cachedSessionKeys.delete(`${server.id}:${stoppedSession.sessionKey}`);
+              const stoppedKey = buildCompositeKey({
+                serverType: server.type,
+                serverId: server.id,
+                externalUserId: stoppedSession.serverUserId,
+                deviceId: stoppedSession.deviceId,
+                ratingKey: stoppedSession.ratingKey,
+                sessionKey: stoppedSession.sessionKey,
+              });
+              cachedSessionKeys.delete(stoppedKey);
             }
 
             return {
@@ -736,7 +744,7 @@ async function processServerSessions(
             : await findActiveSessionByComposite({
                 serverId: server.id,
                 serverUserId: userDetail.id,
-                deviceId: processed.deviceId || processed.sessionKey,
+                deviceId: processed.deviceId || null,
                 ratingKey: processed.ratingKey ?? '',
               });
         if (!existingSession) {
