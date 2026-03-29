@@ -176,9 +176,9 @@ export function mapMediaSession(
     discNumber: session.music?.discNumber ?? null,
     // Connection info
     ipAddress,
-    playerName: session.player.name,
-    deviceId: session.player.deviceId,
-    product: session.player.product ?? '',
+    playerName: session.player.name?.slice(0, 255) ?? '',
+    deviceId: session.player.deviceId?.slice(0, 255),
+    product: session.player.product?.slice(0, 255) ?? '',
     device,
     platform,
     quality,

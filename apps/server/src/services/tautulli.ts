@@ -991,9 +991,9 @@ export class TautulliService {
             geoLon: geo.lon,
             geoAsnNumber: geo.asnNumber,
             geoAsnOrganization: geo.asnOrganization,
-            playerName: record.player || record.product,
-            deviceId: record.machine_id || null,
-            product: record.product || null,
+            playerName: (record.player || record.product)?.slice(0, 255) ?? null,
+            deviceId: record.machine_id?.slice(0, 255) || null,
+            product: record.product?.slice(0, 255) || null,
             // Use normalizeClient with product info to detect Android TV vs Android
             // product contains context like "Plex for Android (TV)" that platform alone lacks
             ...(() => {
