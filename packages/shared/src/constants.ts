@@ -229,6 +229,9 @@ export const REDIS_KEYS = {
   get SESSION_WRITE_RETRY_SET() {
     return `${_redisPrefix}tracearr:session:write-retry:pending`;
   },
+  // Filter options caching
+  FILTER_OPTIONS: (userId: string, scopeHash: string) =>
+    `${_redisPrefix}tracearr:filter-options:${userId}:${scopeHash}`,
 };
 
 // Cache TTLs in seconds
@@ -256,6 +259,8 @@ export const CACHE_TTL = {
   LIBRARY_TOP_SHOWS: 300, // 5 minutes
   LIBRARY_CODECS: 300, // 5 minutes
   LIBRARY_RESOLUTION: 300, // 5 minutes
+  // Filter options (dropdown values change infrequently)
+  FILTER_OPTIONS: 120, // 2 minutes
 } as const;
 
 // Notification event types (must match NotificationEventType in types.ts)

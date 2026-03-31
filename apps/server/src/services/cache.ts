@@ -96,6 +96,10 @@ export interface CacheService {
   incrementSessionWriteRetry(sessionId: string): Promise<number>;
   removeSessionWriteRetry(sessionId: string): Promise<void>;
 
+  // Filter options caching (TTL-based, no active invalidation needed)
+  getFilterOptions(userId: string, scopeHash: string): Promise<string | null>;
+  setFilterOptions(userId: string, scopeHash: string, data: string): Promise<void>;
+
   // Health check
   ping(): Promise<boolean>;
 }
@@ -601,6 +605,18 @@ export function createCacheService(redis: Redis): CacheService {
       const key = REDIS_KEYS.SESSION_WRITE_RETRY(sessionId);
       await redis.del(key);
       await redis.srem(REDIS_KEYS.SESSION_WRITE_RETRY_SET, sessionId);
+    },
+
+    // Filter options caching (TTL-based expiry, no active invalidation)
+    async getFilterOptions(userId: string, scopeHash: string): Promise<string | null> {
+      return redis.get(REDIS_KEYS.FILTER_OPTIONS(userId, scopeHash));
+    },
+    async setFilterOptions(userId: string, scopeHash: string, data: string): Promise<void> {
+      await redis.setex(
+        REDIS_KEYS.FILTER_OPTIONS(userId, scopeHash),
+        CACHE_TTL.FILTER_OPTIONS,
+        data
+      );
     },
 
     // Health check

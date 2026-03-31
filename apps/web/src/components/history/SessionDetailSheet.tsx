@@ -3,9 +3,9 @@
  * Uses condensed info sections matching the app's design patterns.
  */
 
-import { useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { MapContainer, TileLayer, CircleMarker } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -126,8 +126,24 @@ function getProgress(session: SessionWithDetails): number {
   return Math.min(100, Math.round((progress / session.totalDurationMs) * 100));
 }
 
-// Mini map component for session location
-function MiniMap({ lat, lon }: { lat: number; lon: number }) {
+// Updates map center when lat/lon changes without remounting the MapContainer
+function MapCenterUpdater({ lat, lon }: { lat: number; lon: number }) {
+  const map = useMap();
+  const prevRef = useRef({ lat, lon });
+
+  useEffect(() => {
+    if (prevRef.current.lat !== lat || prevRef.current.lon !== lon) {
+      prevRef.current = { lat, lon };
+      map.setView([lat, lon], 10, { animate: false });
+    }
+  }, [lat, lon, map]);
+
+  return null;
+}
+
+// Mini map component for session location — memoized to prevent remounts when
+// parent re-renders while the sheet is open
+const MiniMap = memo(function MiniMap({ lat, lon }: { lat: number; lon: number }) {
   const { theme } = useTheme();
   const resolvedTheme =
     theme === 'system'
@@ -149,6 +165,7 @@ function MiniMap({ lat, lon }: { lat: number; lon: number }) {
         doubleClickZoom={false}
         attributionControl={false}
       >
+        <MapCenterUpdater lat={lat} lon={lon} />
         <TileLayer url={tileUrl} />
         <CircleMarker
           center={[lat, lon]}
@@ -163,7 +180,7 @@ function MiniMap({ lat, lon }: { lat: number; lon: number }) {
       </MapContainer>
     </div>
   );
-}
+});
 
 // Section container matching app's design
 function Section({
@@ -246,19 +263,22 @@ function SegmentTable({
   );
 }
 
-export function SessionDetailSheet({ session, open, onOpenChange }: Props) {
+// Inner content component — keeps state hooks and derived values together
+function SessionContent({
+  session,
+}: {
+  session: SessionWithDetails | ActiveSession;
+}) {
   const [locationOpen, setLocationOpen] = useState(false);
   const [segmentsOpen, setSegmentsOpen] = useState(false);
 
   // Reset segment view when session changes
-  const sessionId = session?.id;
+  const sessionId = session.id;
   const [prevSessionId, setPrevSessionId] = useState(sessionId);
   if (sessionId !== prevSessionId) {
     setPrevSessionId(sessionId);
     setSegmentsOpen(false);
   }
-
-  if (!session) return null;
 
   const serverConfig = SERVER_CONFIG[session.server.type];
   const stateConfig = STATE_CONFIG[session.state];
@@ -274,12 +294,10 @@ export function SessionDetailSheet({ session, open, onOpenChange }: Props) {
       : null;
   const geoAsnNumber = session.geoAsnNumber ? `AS${session.geoAsnNumber}` : null;
 
-  // Get poster URL if available
   const posterUrl = session.thumbPath
     ? imageProxyUrl(session.serverId, session.thumbPath, 120, 180, 'poster')
     : null;
 
-  // Build location string
   const locationParts = [session.geoCity, session.geoRegion, geoCountryName].filter(Boolean);
   const locationString = locationParts.join(', ');
   const transcodeReasons = session.transcodeInfo?.reasons ?? [];
@@ -287,345 +305,355 @@ export function SessionDetailSheet({ session, open, onOpenChange }: Props) {
   const transcodeReasonText = transcodeReasons.map(formatReason).join(', ');
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-[500px]">
-        <SheetHeader className="pb-4">
-          <SheetTitle className="flex items-center gap-2 pr-8 text-base">
-            <stateConfig.icon className={cn('h-4 w-4', stateConfig.color)} />
-            Session Details
-            <Badge
-              variant={
-                session.state === 'playing'
-                  ? 'success'
-                  : session.state === 'paused'
-                    ? 'warning'
-                    : 'secondary'
-              }
-              className="ml-auto"
-            >
-              {stateConfig.label}
-            </Badge>
-          </SheetTitle>
-        </SheetHeader>
+    <>
+      <SheetHeader className="pb-4">
+        <SheetTitle className="flex items-center gap-2 pr-8 text-base">
+          <stateConfig.icon className={cn('h-4 w-4', stateConfig.color)} />
+          Session Details
+          <Badge
+            variant={
+              session.state === 'playing'
+                ? 'success'
+                : session.state === 'paused'
+                  ? 'warning'
+                  : 'secondary'
+            }
+            className="ml-auto"
+          >
+            {stateConfig.label}
+          </Badge>
+        </SheetTitle>
+      </SheetHeader>
 
-        <div className="space-y-3 px-1">
-          {/* Media Info - Hero section */}
-          <div className="flex gap-3 rounded-lg border p-3">
-            {posterUrl && (
-              <img
-                src={posterUrl}
-                alt={primary}
-                className="h-20 w-14 flex-shrink-0 rounded object-cover"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
+      <div className="space-y-3 px-1">
+        {/* Media Info - Hero section */}
+        <div className="flex gap-3 rounded-lg border p-3">
+          {posterUrl && (
+            <img
+              src={posterUrl}
+              alt={primary}
+              className="h-20 w-14 flex-shrink-0 rounded object-cover"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
+              <MediaIcon className="h-3 w-3" />
+              {mediaConfig.label}
+              {session.year && <span>· {session.year}</span>}
+            </div>
+            <div className="flex items-center gap-1.5 leading-tight font-medium">
+              <span className="truncate">{primary}</span>
+              {session.watched && <Eye className="h-3.5 w-3.5 flex-shrink-0 text-green-500" />}
+            </div>
+            {secondary && (
+              <div className="text-muted-foreground mt-0.5 truncate text-sm">{secondary}</div>
             )}
-            <div className="min-w-0 flex-1">
-              <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
-                <MediaIcon className="h-3 w-3" />
-                {mediaConfig.label}
-                {session.year && <span>· {session.year}</span>}
-              </div>
-              <div className="flex items-center gap-1.5 leading-tight font-medium">
-                <span className="truncate">{primary}</span>
-                {session.watched && <Eye className="h-3.5 w-3.5 flex-shrink-0 text-green-500" />}
-              </div>
-              {secondary && (
-                <div className="text-muted-foreground mt-0.5 truncate text-sm">{secondary}</div>
-              )}
-              {/* Progress inline */}
-              <div className="mt-2 flex items-center gap-2">
-                <Progress value={progress} className="h-1.5 flex-1" />
-                <span className="text-muted-foreground w-8 text-xs">{progress}%</span>
-              </div>
+            {/* Progress inline */}
+            <div className="mt-2 flex items-center gap-2">
+              <Progress value={progress} className="h-1.5 flex-1" />
+              <span className="text-muted-foreground w-8 text-xs">{progress}%</span>
             </div>
           </div>
+        </div>
 
-          {/* User */}
-          <Link
-            to={`/users/${session.serverUserId}`}
-            className="hover:bg-muted/50 flex items-center gap-3 rounded-lg border p-3 transition-colors"
-          >
-            <Avatar className="h-9 w-9">
-              <AvatarImage
-                src={getAvatarUrl(session.serverId, session.user.thumbUrl, 36) ?? undefined}
-              />
-              <AvatarFallback>
-                {(session.user.identityName ?? session.user.username)?.[0]?.toUpperCase() ?? '?'}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-medium">
-                {session.user.identityName ?? session.user.username}
-              </p>
-              {session.user.identityName && session.user.identityName !== session.user.username && (
-                <p className="text-muted-foreground truncate text-xs">@{session.user.username}</p>
-              )}
-              {!session.user.identityName && (
-                <p className="text-muted-foreground text-xs">View profile</p>
-              )}
-            </div>
-            <ExternalLink className="text-muted-foreground h-4 w-4" />
-          </Link>
+        {/* User */}
+        <Link
+          to={`/users/${session.serverUserId}`}
+          className="hover:bg-muted/50 flex items-center gap-3 rounded-lg border p-3 transition-colors"
+        >
+          <Avatar className="h-9 w-9">
+            <AvatarImage
+              src={getAvatarUrl(session.serverId, session.user.thumbUrl, 36) ?? undefined}
+            />
+            <AvatarFallback>
+              {(session.user.identityName ?? session.user.username)?.[0]?.toUpperCase() ?? '?'}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium">
+              {session.user.identityName ?? session.user.username}
+            </p>
+            {session.user.identityName && session.user.identityName !== session.user.username && (
+              <p className="text-muted-foreground truncate text-xs">@{session.user.username}</p>
+            )}
+            {!session.user.identityName && (
+              <p className="text-muted-foreground text-xs">View profile</p>
+            )}
+          </div>
+          <ExternalLink className="text-muted-foreground h-4 w-4" />
+        </Link>
 
-          {/* Server */}
-          <Section icon={Server} title="Server">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Server</span>
-              <span className="flex items-center gap-1.5">
-                <span className={serverConfig.color}>{serverConfig.label}</span>
-                <span className="text-muted-foreground">·</span>
-                {session.server.name}
-              </span>
-            </div>
-          </Section>
+        {/* Server */}
+        <Section icon={Server} title="Server">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Server</span>
+            <span className="flex items-center gap-1.5">
+              <span className={serverConfig.color}>{serverConfig.label}</span>
+              <span className="text-muted-foreground">·</span>
+              {session.server.name}
+            </span>
+          </div>
+        </Section>
 
-          {/* Playback Info */}
-          <Section
-            icon={Clock}
-            title="Playback"
-            badge={
-              'segmentCount' in session && session.segmentCount && session.segmentCount > 1 ? (
-                <button
-                  type="button"
-                  onClick={() => setSegmentsOpen((prev) => !prev)}
-                  className="cursor-pointer focus-visible:outline-none"
-                >
-                  <Badge variant="outline" className="gap-0.5 text-xs">
-                    {segmentsOpen ? (
-                      <>
-                        <ChevronLeft className="h-3 w-3" />
-                        Summary
-                      </>
-                    ) : (
-                      <>
-                        {session.segmentCount} Segments
-                        <ChevronRight className="h-3 w-3" />
-                      </>
-                    )}
-                  </Badge>
-                </button>
-              ) : null
-            }
-          >
-            {segmentsOpen && 'segments' in session && session.segments ? (
-              <SegmentTable
-                segments={session.segments}
-                segmentCount={'segmentCount' in session ? session.segmentCount : undefined}
-              />
-            ) : (
-              <div className="space-y-1.5 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Started</span>
-                  <span>
-                    {format(new Date(session.startedAt), getDateTimeFormatString())}
-                    <span className="text-muted-foreground ml-1.5 text-xs">
-                      ({formatDistanceToNow(new Date(session.startedAt), { addSuffix: true })})
-                    </span>
+        {/* Playback Info */}
+        <Section
+          icon={Clock}
+          title="Playback"
+          badge={
+            'segmentCount' in session && session.segmentCount && session.segmentCount > 1 ? (
+              <button
+                type="button"
+                onClick={() => setSegmentsOpen((prev) => !prev)}
+                className="cursor-pointer focus-visible:outline-none"
+              >
+                <Badge variant="outline" className="gap-0.5 text-xs">
+                  {segmentsOpen ? (
+                    <>
+                      <ChevronLeft className="h-3 w-3" />
+                      Summary
+                    </>
+                  ) : (
+                    <>
+                      {session.segmentCount} Segments
+                      <ChevronRight className="h-3 w-3" />
+                    </>
+                  )}
+                </Badge>
+              </button>
+            ) : null
+          }
+        >
+          {segmentsOpen && 'segments' in session && session.segments ? (
+            <SegmentTable
+              segments={session.segments}
+              segmentCount={'segmentCount' in session ? session.segmentCount : undefined}
+            />
+          ) : (
+            <div className="space-y-1.5 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Started</span>
+                <span>
+                  {format(new Date(session.startedAt), getDateTimeFormatString())}
+                  <span className="text-muted-foreground ml-1.5 text-xs">
+                    ({formatDistanceToNow(new Date(session.startedAt), { addSuffix: true })})
                   </span>
-                </div>
-                {session.stoppedAt && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Stopped</span>
-                    <span>{format(new Date(session.stoppedAt), getDateTimeFormatString())}</span>
-                  </div>
-                )}
+                </span>
+              </div>
+              {session.stoppedAt && (
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Watch time</span>
-                  <span>{formatDuration(getWatchTime(session), { style: 'compact' })}</span>
+                  <span className="text-muted-foreground">Stopped</span>
+                  <span>{format(new Date(session.stoppedAt), getDateTimeFormatString())}</span>
                 </div>
-                {session.pausedDurationMs > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Paused</span>
-                    <span>{formatDuration(session.pausedDurationMs, { style: 'compact' })}</span>
-                  </div>
-                )}
-                {session.totalDurationMs && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Media length</span>
-                    <span>{formatDuration(session.totalDurationMs, { style: 'compact' })}</span>
-                  </div>
-                )}
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Watch time</span>
+                <span>{formatDuration(getWatchTime(session), { style: 'compact' })}</span>
+              </div>
+              {session.pausedDurationMs > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Paused</span>
+                  <span>{formatDuration(session.pausedDurationMs, { style: 'compact' })}</span>
+                </div>
+              )}
+              {session.totalDurationMs && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Media length</span>
+                  <span>{formatDuration(session.totalDurationMs, { style: 'compact' })}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </Section>
+
+        {/* Location & Network */}
+        <Section icon={MapPin} title="Location">
+          <Collapsible open={locationOpen} onOpenChange={setLocationOpen} className="space-y-2">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="hover:text-foreground flex w-full items-center justify-between text-sm transition-colors"
+              >
+                <span className="text-muted-foreground">IP Address</span>
+                <span className="flex items-center gap-2">
+                  <span className="font-mono text-xs">{session.ipAddress || '—'}</span>
+                  <ChevronDown
+                    className={cn(
+                      'text-muted-foreground h-3.5 w-3.5 transition-transform',
+                      locationOpen && 'rotate-180'
+                    )}
+                  />
+                </span>
+              </button>
+            </CollapsibleTrigger>
+            {hasLocation && <MiniMap lat={session.geoLat!} lon={session.geoLon!} />}
+            {locationString && (
+              <div className="flex items-center gap-1.5 text-sm">
+                <Globe className="text-muted-foreground h-3.5 w-3.5 flex-shrink-0" />
+                <span>{locationString}</span>
               </div>
             )}
-          </Section>
-
-          {/* Location & Network */}
-          <Section icon={MapPin} title="Location">
-            <Collapsible open={locationOpen} onOpenChange={setLocationOpen} className="space-y-2">
-              <CollapsibleTrigger asChild>
-                <button
-                  type="button"
-                  className="hover:text-foreground flex w-full items-center justify-between text-sm transition-colors"
-                >
-                  <span className="text-muted-foreground">IP Address</span>
-                  <span className="flex items-center gap-2">
-                    <span className="font-mono text-xs">{session.ipAddress || '—'}</span>
-                    <ChevronDown
-                      className={cn(
-                        'text-muted-foreground h-3.5 w-3.5 transition-transform',
-                        locationOpen && 'rotate-180'
-                      )}
-                    />
-                  </span>
-                </button>
-              </CollapsibleTrigger>
-              {hasLocation && <MiniMap lat={session.geoLat!} lon={session.geoLon!} />}
-              {locationString && (
-                <div className="flex items-center gap-1.5 text-sm">
-                  <Globe className="text-muted-foreground h-3.5 w-3.5 flex-shrink-0" />
-                  <span>{locationString}</span>
-                </div>
-              )}
-              <CollapsibleContent className="space-y-2">
-                <div className="space-y-1.5 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Continent</span>
-                    <span>{session.geoContinent ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Country</span>
-                    <span>{geoCountryName ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Region</span>
-                    <span>{session.geoRegion ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">City</span>
-                    <span>{session.geoCity ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Postal Code</span>
-                    <span>{session.geoPostal ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Coordinates</span>
-                    <span className="font-mono text-xs">{geoCoordinates ?? '—'}</span>
-                  </div>
-                  <Separator className="my-2" />
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">ASN</span>
-                    <span>{geoAsnNumber ?? '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">ASN Org</span>
-                    <span className="max-w-[180px] truncate text-right">
-                      {session.geoAsnOrganization ?? '—'}
-                    </span>
-                  </div>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          </Section>
-
-          {/* Device */}
-          <Section icon={Smartphone} title="Device">
-            <div className="space-y-1.5 text-sm">
-              {session.platform && (
+            <CollapsibleContent className="space-y-2">
+              <div className="space-y-1.5 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Platform</span>
-                  <span>{session.platform}</span>
+                  <span className="text-muted-foreground">Continent</span>
+                  <span>{session.geoContinent ?? '—'}</span>
                 </div>
-              )}
-              {session.product && (
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Product</span>
-                  <span>{session.product}</span>
+                  <span className="text-muted-foreground">Country</span>
+                  <span>{geoCountryName ?? '—'}</span>
                 </div>
-              )}
-              {session.device && (
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Device</span>
-                  <span>{session.device}</span>
+                  <span className="text-muted-foreground">Region</span>
+                  <span>{session.geoRegion ?? '—'}</span>
                 </div>
-              )}
-              {session.playerName && (
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Player</span>
-                  <span>{session.playerName}</span>
+                  <span className="text-muted-foreground">City</span>
+                  <span>{session.geoCity ?? '—'}</span>
                 </div>
-              )}
-              {session.deviceId && (
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Device ID</span>
-                  <span className="max-w-[160px] truncate font-mono text-xs">
-                    {session.deviceId}
+                  <span className="text-muted-foreground">Postal Code</span>
+                  <span>{session.geoPostal ?? '—'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Coordinates</span>
+                  <span className="font-mono text-xs">{geoCoordinates ?? '—'}</span>
+                </div>
+                <Separator className="my-2" />
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">ASN</span>
+                  <span>{geoAsnNumber ?? '—'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">ASN Org</span>
+                  <span className="max-w-[180px] truncate text-right">
+                    {session.geoAsnOrganization ?? '—'}
                   </span>
                 </div>
-              )}
-            </div>
-          </Section>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        </Section>
 
-          {/* Stream Details */}
-          <Section
-            icon={Gauge}
-            title="Stream Details"
-            badge={(() => {
-              const isHwTranscode =
-                session.isTranscode &&
-                !!(session.transcodeInfo?.hwEncoding || session.transcodeInfo?.hwDecoding);
-              const TranscodeIcon = isHwTranscode ? Cpu : Zap;
+        {/* Device */}
+        <Section icon={Smartphone} title="Device">
+          <div className="space-y-1.5 text-sm">
+            {session.platform && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Platform</span>
+                <span>{session.platform}</span>
+              </div>
+            )}
+            {session.product && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Product</span>
+                <span>{session.product}</span>
+              </div>
+            )}
+            {session.device && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Device</span>
+                <span>{session.device}</span>
+              </div>
+            )}
+            {session.playerName && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Player</span>
+                <span>{session.playerName}</span>
+              </div>
+            )}
+            {session.deviceId && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Device ID</span>
+                <span className="max-w-[160px] truncate font-mono text-xs">
+                  {session.deviceId}
+                </span>
+              </div>
+            )}
+          </div>
+        </Section>
 
-              if (session.isTranscode) {
-                return (
-                  <Badge variant="warning" className="gap-1 text-xs">
-                    {hasTranscodeReason ? (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="flex items-center gap-1">
-                              <TranscodeIcon className="h-3 w-3" />
-                              Transcode
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs text-left">
-                            <span className="text-[11px]">{transcodeReasonText}</span>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    ) : (
-                      <>
-                        <TranscodeIcon className="h-3 w-3" />
-                        Transcode
-                      </>
-                    )}
-                  </Badge>
-                );
-              }
+        {/* Stream Details */}
+        <Section
+          icon={Gauge}
+          title="Stream Details"
+          badge={(() => {
+            const isHwTranscode =
+              session.isTranscode &&
+              !!(session.transcodeInfo?.hwEncoding || session.transcodeInfo?.hwDecoding);
+            const TranscodeIcon = isHwTranscode ? Cpu : Zap;
 
+            if (session.isTranscode) {
               return (
-                <Badge variant="success" className="gap-1 text-xs">
-                  <MonitorPlay className="h-3 w-3" />
-                  {session.videoDecision === 'copy' || session.audioDecision === 'copy'
-                    ? 'Direct Stream'
-                    : 'Direct Play'}
+                <Badge variant="warning" className="gap-1 text-xs">
+                  {hasTranscodeReason ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="flex items-center gap-1">
+                            <TranscodeIcon className="h-3 w-3" />
+                            Transcode
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-left">
+                          <span className="text-[11px]">{transcodeReasonText}</span>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <>
+                      <TranscodeIcon className="h-3 w-3" />
+                      Transcode
+                    </>
+                  )}
                 </Badge>
               );
-            })()}
-          >
-            <StreamDetailsPanel
-              sourceVideoCodec={session.sourceVideoCodec ?? null}
-              sourceAudioCodec={session.sourceAudioCodec ?? null}
-              sourceAudioChannels={session.sourceAudioChannels ?? null}
-              sourceVideoWidth={session.sourceVideoWidth ?? null}
-              sourceVideoHeight={session.sourceVideoHeight ?? null}
-              streamVideoCodec={session.streamVideoCodec ?? null}
-              streamAudioCodec={session.streamAudioCodec ?? null}
-              sourceVideoDetails={session.sourceVideoDetails ?? null}
-              sourceAudioDetails={session.sourceAudioDetails ?? null}
-              streamVideoDetails={session.streamVideoDetails ?? null}
-              streamAudioDetails={session.streamAudioDetails ?? null}
-              transcodeInfo={session.transcodeInfo ?? null}
-              subtitleInfo={session.subtitleInfo ?? null}
-              videoDecision={session.videoDecision ?? null}
-              audioDecision={session.audioDecision ?? null}
-              bitrate={session.bitrate ?? null}
-              serverType={session.server.type}
-            />
-          </Section>
-        </div>
+            }
+
+            return (
+              <Badge variant="success" className="gap-1 text-xs">
+                <MonitorPlay className="h-3 w-3" />
+                {session.videoDecision === 'copy' || session.audioDecision === 'copy'
+                  ? 'Direct Stream'
+                  : 'Direct Play'}
+              </Badge>
+            );
+          })()}
+        >
+          <StreamDetailsPanel
+            sourceVideoCodec={session.sourceVideoCodec ?? null}
+            sourceAudioCodec={session.sourceAudioCodec ?? null}
+            sourceAudioChannels={session.sourceAudioChannels ?? null}
+            sourceVideoWidth={session.sourceVideoWidth ?? null}
+            sourceVideoHeight={session.sourceVideoHeight ?? null}
+            streamVideoCodec={session.streamVideoCodec ?? null}
+            streamAudioCodec={session.streamAudioCodec ?? null}
+            sourceVideoDetails={session.sourceVideoDetails ?? null}
+            sourceAudioDetails={session.sourceAudioDetails ?? null}
+            streamVideoDetails={session.streamVideoDetails ?? null}
+            streamAudioDetails={session.streamAudioDetails ?? null}
+            transcodeInfo={session.transcodeInfo ?? null}
+            subtitleInfo={session.subtitleInfo ?? null}
+            videoDecision={session.videoDecision ?? null}
+            audioDecision={session.audioDecision ?? null}
+            bitrate={session.bitrate ?? null}
+            serverType={session.server.type}
+          />
+        </Section>
+      </div>
+    </>
+  );
+}
+
+export function SessionDetailSheet({ session, open, onOpenChange }: Props) {
+  if (!session) return null;
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full overflow-y-auto sm:max-w-[500px]">
+        <SessionContent session={session} />
       </SheetContent>
     </Sheet>
   );

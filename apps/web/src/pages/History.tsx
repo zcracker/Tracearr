@@ -6,7 +6,6 @@
 import { useEffect, useMemo, useCallback, useState, useRef } from 'react';
 import { useSearchParams, useParams, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { useInView } from 'react-intersection-observer';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   HistoryFiltersBar,
@@ -215,19 +214,6 @@ export function History() {
     endDate: filters.endDate,
   });
 
-  // Intersection observer for infinite scroll
-  const { ref: loadMoreRef, inView } = useInView({
-    threshold: 0,
-    rootMargin: '200px', // Start loading before reaching the end
-  });
-
-  // Fetch next page when load more element is in view
-  useEffect(() => {
-    if (inView && hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
-
   // Flatten pages into single sessions array
   const sessions = useMemo(() => {
     return data?.pages.flatMap((page) => page.data) ?? [];
@@ -309,31 +295,14 @@ export function History() {
             sessions={sessions}
             isLoading={isLoading}
             isFetchingNextPage={isFetchingNextPage}
+            hasNextPage={hasNextPage}
+            onLoadMore={() => void fetchNextPage()}
             onSessionClick={handleSessionClick}
             columnVisibility={columnVisibility}
             sortBy={filters.orderBy ?? 'startedAt'}
             sortDir={filters.orderDir ?? 'desc'}
             onSortChange={handleSortChange}
           />
-
-          {/* Infinite scroll trigger */}
-          {hasNextPage && (
-            <div
-              ref={loadMoreRef}
-              className="text-muted-foreground flex justify-center py-4 text-sm"
-            >
-              {isFetchingNextPage
-                ? t('pages:history.loadingMore')
-                : t('pages:history.scrollForMore')}
-            </div>
-          )}
-
-          {/* End of results indicator */}
-          {!hasNextPage && sessions.length > 0 && (
-            <div className="text-muted-foreground flex justify-center py-4 text-sm">
-              {t('pages:history.showingAllResults', { total: total?.toLocaleString() })}
-            </div>
-          )}
         </CardContent>
       </Card>
 

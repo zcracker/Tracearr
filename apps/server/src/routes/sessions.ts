@@ -35,6 +35,7 @@ import { sessions, serverUsers, servers, users } from '../db/schema.js';
 import { hasServerAccess, resolveServerIds } from '../utils/serverFiltering.js';
 import { terminateSession } from '../services/termination.js';
 import { getCacheService } from '../services/cache.js';
+import { createHash } from 'node:crypto';
 
 /**
  * Result from building history filter conditions.
@@ -185,6 +186,25 @@ function buildHistoryFilterConditions(
     conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
 
   return { conditions, whereClause };
+}
+
+/**
+ * Build a short hash fingerprint from filter parameters for cache keys.
+ */
+function buildCacheFingerprint(params: Record<string, unknown>, userId: string): string {
+  // Sort keys for stable hashing regardless of parameter order
+  const sorted = Object.keys(params)
+    .filter((k) => k !== 'cursor' && k !== 'pageSize')
+    .sort()
+    .reduce<Record<string, unknown>>((acc, key) => {
+      const val = params[key];
+      if (val !== undefined && val !== null && val !== '') {
+        acc[key] = Array.isArray(val) ? val.slice().sort() : val;
+      }
+      return acc;
+    }, {});
+  const raw = `${userId}:${JSON.stringify(sorted)}`;
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
@@ -606,15 +626,7 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
           gs.progress_ms,
           gs.total_duration_ms,
           gs.segment_count,
-          CASE WHEN gs.segment_count > 1 THEN
-            (SELECT json_agg(sub) FROM (
-              SELECT s2.started_at, s2.stopped_at, s2.duration_ms, s2.paused_duration_ms
-              FROM sessions s2
-              WHERE s2.reference_id = gs.play_id OR s2.id = gs.play_id
-              ORDER BY s2.started_at
-              LIMIT 20
-            ) sub)
-          END as segments,
+          lat.segments,
           gs.watched,
           gs.state,
           s.server_id,
@@ -673,6 +685,18 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
         JOIN server_users su ON su.id = s.server_user_id
         JOIN servers sv ON sv.id = s.server_id
         LEFT JOIN users u ON u.id = su.user_id
+        LEFT JOIN LATERAL (
+          SELECT json_agg(sub ORDER BY sub.started_at) AS segments
+          FROM (
+            SELECT s2.started_at, s2.stopped_at, s2.duration_ms, s2.paused_duration_ms
+            FROM sessions s2
+            WHERE COALESCE(s2.reference_id, s2.id) = gs.play_id
+              AND gs.segment_count > 1
+              AND s2.started_at >= gs.started_at - INTERVAL '30 days'
+            ORDER BY s2.started_at
+            LIMIT 20
+          ) sub
+        ) lat ON true
         ${
           cursorTime && cursorId
             ? orderDir === 'desc'
@@ -956,6 +980,19 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
 
     const authUser = request.user;
 
+    // Check cache
+    const cacheService = getCacheService();
+    const filterScopeHash = buildCacheFingerprint(
+      { serverId, startDate: startDate?.toISOString(), endDate: endDate?.toISOString(), includeAllCountries },
+      authUser.userId
+    );
+    if (cacheService) {
+      const cached = await cacheService.getFilterOptions(authUser.userId, filterScopeHash);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    }
+
     // Build server access conditions
     const serverConditions: ReturnType<typeof sql>[] = [];
     if (serverId) {
@@ -1065,8 +1102,26 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
             ORDER BY count DESC
             LIMIT 100
           `),
-      // Users - all synced users, sorted by display name
-      db.execute(sql`
+      // Users - filtered to those with sessions matching current filter context
+      db.execute(
+        serverConditions.length > 0
+          ? sql`
+            SELECT
+              su.id,
+              su.username,
+              su.thumb_url,
+              su.server_id,
+              u.name as identity_name
+            FROM server_users su
+            LEFT JOIN users u ON u.id = su.user_id
+            WHERE su.id IN (
+              SELECT DISTINCT s.server_user_id
+              FROM sessions s
+              WHERE ${sql.join(serverConditions, sql` AND `)}
+            )
+            ORDER BY LOWER(COALESCE(u.name, su.username))
+          `
+          : sql`
             SELECT
               su.id,
               su.username,
@@ -1076,7 +1131,8 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
             FROM server_users su
             LEFT JOIN users u ON u.id = su.user_id
             ORDER BY LOWER(COALESCE(u.name, su.username))
-          `),
+          `
+      ),
       // Servers (for rules builder)
       db.select({ id: servers.id, name: servers.name, type: servers.type }).from(servers),
     ]);
@@ -1138,6 +1194,11 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
         servers: serversData,
       };
 
+      // Cache the result
+      if (cacheService) {
+        void cacheService.setFilterOptions(authUser.userId, filterScopeHash, JSON.stringify(rulesResponse));
+      }
+
       return rulesResponse;
     }
 
@@ -1151,6 +1212,11 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
       users: usersData,
       servers: serversData,
     };
+
+    // Cache the result
+    if (cacheService) {
+      void cacheService.setFilterOptions(authUser.userId, filterScopeHash, JSON.stringify(response));
+    }
 
     return response;
   });

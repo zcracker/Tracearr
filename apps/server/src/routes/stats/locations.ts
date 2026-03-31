@@ -12,7 +12,6 @@ import { sql } from 'drizzle-orm';
 import { locationStatsQuerySchema } from '@tracearr/shared';
 import { db } from '../../db/client.js';
 import { resolveDateRange } from './utils.js';
-import { PRIMARY_MEDIA_TYPE_CONDITION_S } from '../../constants/index.js';
 
 interface LocationFilters {
   users: { id: string; username: string; identityName: string | null }[];
@@ -71,12 +70,9 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
     if (serverId) {
       conditions.push(sql`s.server_id = ${serverId}`);
     }
-    // If specific mediaType requested, filter to it; otherwise default to movie/episode
-    // (excludes live TV and music tracks from general location stats)
+    // If specific mediaType requested, filter to it; otherwise show all types
     if (mediaType) {
       conditions.push(sql`s.media_type = ${mediaType}`);
-    } else {
-      conditions.push(PRIMARY_MEDIA_TYPE_CONDITION_S);
     }
 
     const whereClause = sql`WHERE ${sql.join(conditions, sql` AND `)}`;
@@ -106,24 +102,18 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Users filter: apply server + mediaType filters (not user filter)
-    // Default to movie/episode to show users who watched primary content
     const userFilterConditions = [...baseConditions];
     if (serverId) userFilterConditions.push(sql`s.server_id = ${serverId}`);
     if (mediaType) {
       userFilterConditions.push(sql`s.media_type = ${mediaType}`);
-    } else {
-      userFilterConditions.push(PRIMARY_MEDIA_TYPE_CONDITION_S);
     }
     const userFilterWhereClause = sql`WHERE ${sql.join(userFilterConditions, sql` AND `)}`;
 
     // Servers filter: apply user + mediaType filters (not server filter)
-    // Default to movie/episode to show servers with primary content plays
     const serverFilterConditions = [...baseConditions];
     if (serverUserId) serverFilterConditions.push(sql`s.server_user_id = ${serverUserId}`);
     if (mediaType) {
       serverFilterConditions.push(sql`s.media_type = ${mediaType}`);
-    } else {
-      serverFilterConditions.push(PRIMARY_MEDIA_TYPE_CONDITION_S);
     }
     const serverFilterWhereClause = sql`WHERE ${sql.join(serverFilterConditions, sql` AND `)}`;
 
